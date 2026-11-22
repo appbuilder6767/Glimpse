@@ -15,6 +15,7 @@
  *       yt=first gets YouTube's first page; yt=<token> gets the next page;
  *       leave yt out to skip YouTube for that page (saves YouTube quota).
  *       short=0 allows YouTube videos longer than 4 minutes.
+ *       vertical=1 asks YouTube for Shorts and keeps only tall videos.
  *   GET /api/search?refresh=pixabay-photo-123    fresh copy of a saved Pixabay photo
  *   GET /api/search?refresh=youtube-ID,youtube-ID  re-check saved YouTube videos (max 50)
  *   GET /api/search?asset=manifest | asset=icon  home-screen app manifest and icon
@@ -324,10 +325,10 @@ function bestThumb(t) {
   return httpsUrl(x.url);
 }
 
-async function youtubeSearch(q, token, short) {
+async function youtubeSearch(q, token, short, vertical) {
   const key = env('YOUTUBE_API_KEY');
   const params = {
-    part: 'snippet', type: 'video', q, maxResults: YT_PER_PAGE,
+    part: 'snippet', type: 'video', q: vertical ? `${q} #shorts` : q, maxResults: YT_PER_PAGE,
     safeSearch: 'strict', videoEmbeddable: 'true', videoSyndicated: 'true', key,
   };
   if (short) params.videoDuration = 'short';
@@ -344,11 +345,16 @@ async function youtubeSearch(q, token, short) {
     }));
     if (v.ok && v.data) for (const it of v.data.items || []) details[it.id] = it;
   }
-  const items = [];
+  let items = [];
   hits.forEach((hit, i) => {
     const n = normYouTube(hit.id.videoId, i, details[hit.id.videoId], hit.snippet);
     if (n) items.push(n);
   });
+  // Vertical mode keeps only tall videos (Shorts), unless that would leave nothing.
+  if (vertical) {
+    const tall = items.filter((it) => it.height > it.width);
+    if (tall.length) items = tall.map((it, i) => Object.assign(it, { rank: i }));
+  }
   return { items, nextToken: s.data.nextPageToken || null };
 }
 
@@ -577,6 +583,7 @@ module.exports = async function handler(req, res) {
   const ytToken = ytParam === 'first' || /^[A-Za-z0-9_-]{1,120}$/.test(ytParam) ? ytParam : '';
   const short = p.get('short') !== '0';
   const media = p.get('media') !== '0';
+  const vertical = p.get('vertical') === '1';
 
   const errors = [];
   if (!have.pexels && !have.pixabay && !have.youtube) {
@@ -588,7 +595,7 @@ module.exports = async function handler(req, res) {
   const jobs = [];
   if (media && have.pexels) jobs.push(['pexels', pexelsSearch(q, page, both ? { photos: 8, videos: 5 } : { photos: 12, videos: 8 })]);
   if (media && have.pixabay) jobs.push(['pixabay', pixabaySearch(q, page, both ? { photos: 6, videos: 4 } : { photos: 12, videos: 8 })]);
-  if (have.youtube && ytToken) jobs.push(['youtube', youtubeSearch(q, ytToken, short)]);
+  if (have.youtube && ytToken) jobs.push(['youtube', youtubeSearch(q, ytToken, short, vertical)]);
 
   const settled = await Promise.allSettled(jobs.map((j) => j[1]));
   let items = [];
